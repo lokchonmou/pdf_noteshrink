@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="PDF Noteshrink - 掃描筆記壓縮工具，在瀏覽器中本地處理">
+    <meta name="version" content="1.0.0">
+    <meta name="author" content="LOK CHON MOU">
+    <title>PDF Noteshrink v1.0.0 - 掃描筆記壓縮工具</title>
+    <link rel="stylesheet" href="/src/style.css">
+    <!-- 版權信息: Licensed under MIT License -->
+</head>
+<body>
+    <div id="app" class="container">
+        <header class="header">
+            <h1>📄 PDF Noteshrink</h1>
+            <p>掃描筆記壓縮工具 - 在瀏覽器中本地處理</p>
+            <p class="version-info">v1.0.0</p>
+        </header>
+
+        <main class="main">
+            <!-- 上傳區域 -->
+            <section class="upload-section">
+                <h2>步驟 1: 上傳檔案</h2>
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-content">
+                        <p>📁 拖拽 PDF 或圖片到這裡</p>
+                        <p class="small">或點擊選擇檔案</p>
+                        <p class="size-limit">最大檔案大小: 50 MB</p>
+                    </div>
+                    <input type="file" id="fileInput" multiple accept=".pdf,.jpg,.jpeg,.png">
+                </div>
+                <div class="file-preview" id="filePreview"></div>
+                
+                <!-- 圖片預覽區 -->
+                <div class="image-preview-section" id="imagePreviewSection" style="display: none;">
+                    <h3>📸 圖片預覽</h3>
+                    <div class="image-preview-grid" id="imagePreviewGrid"></div>
+                </div>
+            </section>
+
+            <!-- 參數設置 -->
+            <section class="params-section">
+                <h2>步驟 2: 調整參數</h2>
+                <div class="params-grid">
+                    <div class="param-group">
+                        <label for="dpi">
+                            DPI (解析度):
+                            <span class="tooltip-icon" title="調整掃描圖片的解析度。更高 DPI (如 300) 保留更多細節但檔案更大；較低 DPI (如 150) 壓縮更強。">?</span>
+                        </label>
+                        <input type="range" id="dpi" min="72" max="300" value="150" step="1">
+                        <span id="dpiValue">150</span>
+                    </div>
+
+                    <div class="param-group">
+                        <label for="numColors">
+                            色彩數量:
+                            <span class="tooltip-icon" title="調色板中的顏色數。更少顏色 (如 2-4) 壓縮率高但色彩損失多；更多顏色 (如 16-32) 品質好但壓縮率低。">?</span>
+                        </label>
+                        <input type="range" id="numColors" min="2" max="256" value="8" step="1">
+                        <span id="numColorsValue">8</span>
+                    </div>
+
+                    <div class="param-group">
+                        <label for="valueThreshold">
+                            背景亮度閾值:
+                            <span class="tooltip-icon" title="用於分離背景和前景。值越大，越多亮色區域被當作背景。若圖片對比度低，嘗試減小此值 (如 0.1-0.15)；對比度高則可增大 (如 0.3-0.4)。">?</span>
+                        </label>
+                        <input type="range" id="valueThreshold" min="0" max="1" value="0.25" step="0.01">
+                        <span id="valueThresholdValue">0.25</span>
+                    </div>
+
+                    <div class="param-group">
+                        <label for="satThreshold">
+                            背景飽和度閾值:
+                            <span class="tooltip-icon" title="用於分離背景。值越小，越多低飽和度區域被當作背景。若背景不夠白淨，嘗試增大此值 (如 0.3-0.5)。">?</span>
+                        </label>
+                        <input type="range" id="satThreshold" min="0" max="1" value="0.20" step="0.01">
+                        <span id="satThresholdValue">0.20</span>
+                    </div>
+
+                    <div class="param-group">
+                        <label for="sampleFraction">
+                            取樣比例 (%):
+                            <span class="tooltip-icon" title="只分析圖片中的部分像素來計算調色板。100% 表示分析所有像素 (精確但慢)；較低比例 (如 30-50%) 加快速度但可能犧牲色彩準確度。">?</span>
+                        </label>
+                        <input type="range" id="sampleFraction" min="1" max="50" value="5" step="1">
+                        <span id="sampleFractionValue">5</span>
+                    </div>
+
+                    <div class="param-group checkbox">
+                        <input type="checkbox" id="saturate" checked>
+                        <label for="saturate">
+                            飽和度提升
+                            <span class="tooltip-icon" title="增強前景的色彩飽和度，使筆跡顏色更鮮豔。適合色彩筆跡；不勾選可保留原始色彩。">?</span>
+                        </label>
+                    </div>
+
+                    <div class="param-group checkbox">
+                        <input type="checkbox" id="globalPalette">
+                        <label for="globalPalette">
+                            全域調色板
+                            <span class="tooltip-icon" title="掃描所有圖片並計算統一調色板。適合多頁 PDF，保證色彩一致；可能提高壓縮率。">?</span>
+                        </label>
+                    </div>
+
+                    <div class="param-group checkbox">
+                        <input type="checkbox" id="whiteBg">
+                        <label for="whiteBg">
+                            白色背景
+                            <span class="tooltip-icon" title="強制將背景設置為白色。適合掃描件；不勾選保留原始背景色彩。">?</span>
+                        </label>
+                    </div>
+
+                    <div class="param-group">
+                        <label for="outputFormat">
+                            輸出格式:
+                            <span class="tooltip-icon" title="PDF：多頁文件或組合輸出；PNG/JPG：單一圖片。">?</span>
+                        </label>
+                        <select id="outputFormat">
+                            <option value="pdf">PDF</option>
+                            <option value="png">PNG (單頁)</option>
+                            <option value="jpg">JPG (單頁)</option>
+                        </select>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 進度區域 -->
+            <section class="progress-section">
+                <h2>步驟 3: 處理中</h2>
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                    </div>
+                    <p id="progressText" class="progress-text">準備就緒</p>
+                </div>
+                <button id="processBtn" class="btn btn-primary" disabled>開始處理</button>
+                <button id="downloadBtn" class="btn btn-success" style="display: none;">下載結果</button>
+                
+                <!-- 輸出預覽區域 -->
+                <div class="output-preview-section" id="outputPreviewSection" style="display: none;">
+                    <h3>📊 輸出預覽</h3>
+                    <p class="preview-info">點擊圖片可放大查看</p>
+                    <div class="output-preview-grid" id="outputPreviewGrid"></div>
+                </div>
+                
+                <!-- 圖片放大預覽 Modal -->
+                <div class="preview-modal" id="previewModal" style="display: none;">
+                    <div class="modal-content">
+                        <span class="modal-close" id="modalClose">&times;</span>
+                        <img id="modalImage" alt="Preview">
+                        <p id="modalCaption" class="modal-caption"></p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 日誌區域 -->
+            <section class="log-section">
+                <h2>處理日誌</h2>
+                <div class="log-box" id="logBox"></div>
+                <button id="clearLogBtn" class="btn btn-secondary">清除日誌</button>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <p>所有處理都在您的瀏覽器中本地進行，無任何資料上傳</p>
+            <p class="copyright">
+                &copy; 2025 PDF Noteshrink | v1.0.0 | 
+                <a href="https://github.com/lokchonmou/pdf_noteshrink" target="_blank">GitHub</a> |
+                <a href="https://opensource.org/licenses/MIT" target="_blank">MIT License</a>
+            </p>
+            <p class="credits">
+                🙏 <strong>致謝</strong>: 本項目基於 
+                <a href="https://github.com/mzucker/noteshrink" target="_blank">mzucker/noteshrink</a> 
+                的原始算法開發，將其移植為 Web 瀏覽器版本。
+                <br>
+                特別感謝原作者 <strong>Matt Zucker</strong> 的卓越工作。
+            </p>
+        </footer>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html>
