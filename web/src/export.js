@@ -6,6 +6,8 @@
 
 import jsPDF from 'jspdf';
 import { labelsToRGBA, createImageData } from './image-processor.js';
+import { getPalette, applyPalette, samplePixels } from './noteshrink.js';
+import { imageDataFromDataUrl } from './pdf-handler.js';
 
 /**
  * 將索引圖和調色板轉換為圖片 Data URL (支持 PNG 或 JPG)
@@ -230,4 +232,106 @@ export function generateFilename(format = 'pdf') {
     
     const ext = extensions[format] || 'pdf';
     return `noteshrink_${timestamp}.${ext}`;
+}
+
+/**
+ * 快速預估輸出檔案大小（處理前）
+ * 策略：對每頁做低解析度抽樣量化並以 JPG 壓縮，依像素數比例外推。
+ * 注意：這是經驗性估算，實際結果會因內容、品質、PDF 容器開銷而有偏差。
+ *
+ * @param {Array<{image:string,width:number,height:number,page:number}>} inputImages 來自 convertFilesToImages 的輸入圖
+ * @param {Object} options noteshrink 相關選項 { numColors, valueThreshold, satThreshold, sampleFraction }
+ * @param {Object} cfg 額外設定 { format: 'pdf'|'png'|'jpg', jpgQuality?: number, maxPreviewPixels?: number }
+ * @returns {Promise<{ totalBytes:number, perPage:number[], meta:{method:string,quality:number,scale:number} }>} 預估結果
+ */
+export async function estimateOutputSizePreflight(inputImages, options = {}, cfg = {}) {
+    const {
+        numColors = 8,
+        valueThreshold = 0.25,
+        satThreshold = 0.20,
+        sampleFraction = 0.05,
+    } = options;
+
+    const {
+        format = 'pdf',
+        jpgQuality = 0.9,
+        maxPreviewPixels = 512 * 512, // 每頁預估時的最大像素數
+        kmeansIter = 8,               // 降低迭代以加快預估
+    } = cfg;
+
+    const perPage = [];
+
+    for (const imgInfo of inputImages) {
+        // 1) 讀入原圖
+        const { image } = imgInfo;
+        const { data, width, height } = await imageDataFromDataUrl(image);
+
+        const origPixels = width * height;
+
+        // 2) 計算縮放比例（限制像素數到 maxPreviewPixels）
+        const scale = Math.min(1, Math.sqrt(maxPreviewPixels / Math.max(1, origPixels)));
+        const prevW = Math.max(1, Math.round(width * scale));
+        const prevH = Math.max(1, Math.round(height * scale));
+
+        // 3) 產生縮圖 RGB
+        const tmpCanvas = document.createElement('canvas');
+        tmpCanvas.width = prevW;
+        tmpCanvas.height = prevH;
+        const tctx = tmpCanvas.getContext('2d');
+        const imgEl = new Image();
+        await new Promise((res) => { imgEl.onload = res; imgEl.src = image; });
+        tctx.drawImage(imgEl, 0, 0, prevW, prevH);
+        const prevImageData = tctx.getImageData(0, 0, prevW, prevH);
+        const prevRGB = new Uint8ClampedArray(prevW * prevH * 3);
+        for (let i = 0, j = 0; i < prevImageData.data.length; i += 4, j += 3) {
+            prevRGB[j] = prevImageData.data[i];
+            prevRGB[j + 1] = prevImageData.data[i + 1];
+            prevRGB[j + 2] = prevImageData.data[i + 2];
+        }
+
+        // 4) 以較小樣本與較少迭代取得調色板
+        const samples = samplePixels(prevRGB, Math.max(0.01, sampleFraction * 0.5));
+        const palette = getPalette(samples, numColors, valueThreshold, satThreshold, kmeansIter);
+
+        // 5) 套用調色板得到索引圖，轉回像素並以 JPG 壓縮
+        const labels = applyPalette(prevRGB, palette, valueThreshold, satThreshold);
+        const rgba = labelsToRGBA(labels, palette, prevW, prevH);
+        const imageData = createImageData(rgba, prevW, prevH);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = prevW;
+        canvas.height = prevH;
+        const ctx = canvas.getContext('2d');
+        ctx.putImageData(imageData, 0, 0);
+        const jpgUrl = canvas.toDataURL('image/jpeg', jpgQuality);
+        const blob = await (await fetch(jpgUrl)).blob();
+        const previewBytes = blob.size;
+
+        // 6) 依像素數外推至原始大小；加上容器微小開銷
+        const extrapolated = previewBytes * (origPixels / Math.max(1, prevW * prevH));
+        const containerOverhead = 2048; // PDF 每頁或圖片的額外 bytes（估）
+        perPage.push(Math.round(extrapolated + containerOverhead));
+    }
+
+    // PDF 就是總和；PNG/JPG 在現有實作只輸出第一張（維持一致）
+    let totalBytes = 0;
+    if (format === 'pdf') {
+        totalBytes = perPage.reduce((a, b) => a + b, 0);
+        // PDF 額外文件頭/交叉引用等，整體再加 1%
+        totalBytes = Math.round(totalBytes * 1.01);
+    } else if (format === 'png' || format === 'jpg') {
+        totalBytes = perPage[0] || 0;
+    } else {
+        totalBytes = perPage.reduce((a, b) => a + b, 0);
+    }
+
+    return {
+        totalBytes,
+        perPage,
+        meta: {
+            method: 'downscale+kmeans_preview_extrapolation',
+            quality: cfg.jpgQuality ?? 0.9,
+            scale: 'auto_by_pixel_budget',
+        },
+    };
 }

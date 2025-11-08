@@ -5,7 +5,7 @@
 
 import { isPDF, isImage, pdfToImages, loadImage } from './pdf-handler.js';
 import { processImages } from './image-processor.js';
-import { exportResults, downloadBlob, generateFilename } from './export.js';
+import { exportResults, downloadBlob, generateFilename, estimateOutputSizePreflight } from './export.js';
 
 // 將由其他模組填充
 let state = {
@@ -21,6 +21,7 @@ const fileInput = document.getElementById('fileInput');
 const filePreview = document.getElementById('filePreview');
 const imagePreviewSection = document.getElementById('imagePreviewSection');
 const imagePreviewGrid = document.getElementById('imagePreviewGrid');
+const estimateBtn = document.getElementById('estimateBtn');
 const processBtn = document.getElementById('processBtn');
 const downloadBtn = document.getElementById('downloadBtn');
 const logBox = document.getElementById('logBox');
@@ -199,6 +200,7 @@ function handleFileSelect(files) {
     
     addLog(`檔案總大小: ${totalSizeMB.toFixed(2)} MB`, 'info');
     processBtn.disabled = false;
+    estimateBtn.disabled = false;
 }
 
 // 移除檔案
@@ -212,6 +214,7 @@ window.removeFile = function(index) {
         imagePreviewGrid.innerHTML = '';
         imagePreviewSection.style.display = 'none';
         processBtn.disabled = true;
+        estimateBtn.disabled = true;
         addLog('請選擇檔案', 'warning');
     } else {
         handleFileSelect(state.files);
@@ -220,6 +223,49 @@ window.removeFile = function(index) {
 
 // 處理按鈕
 processBtn.addEventListener('click', startProcessing);
+estimateBtn.addEventListener('click', estimateOnly);
+
+/**
+ * 只做容量預估（不執行 noteshrink 處理）
+ */
+async function estimateOnly() {
+    if (state.files.length === 0) {
+        addLog('請先選擇檔案', 'warning');
+        return;
+    }
+
+    estimateBtn.disabled = true;
+    addLog('================================', 'progress');
+    addLog('🔎 開始預估最終輸出大小（不處理圖像）...', 'progress');
+
+    try {
+        // 準備影像：若已有 inputImages 可直接用；否則做輕量轉換供預估用
+        let imageInfos = state.inputImages;
+        if (!imageInfos || imageInfos.length === 0) {
+            imageInfos = await convertFilesToImagesForPreflight(state.files);
+        }
+
+        const preOptions = {
+            numColors: parseInt(numColorsInput.value),
+            valueThreshold: parseFloat(valueThresholdInput.value),
+            satThreshold: parseFloat(satThresholdInput.value),
+            sampleFraction: parseFloat(sampleFractionInput.value) / 100,
+        };
+        const format = outputFormatSelect.value;
+        const est = await estimateOutputSizePreflight(imageInfos, preOptions, { format, jpgQuality: 0.9 });
+        const totalMB = (est.totalBytes / 1024 / 1024).toFixed(2);
+        addLog(`📐 預估總大小: ~${totalMB} MB`, 'success');
+        if (est.perPage && est.perPage.length > 1) {
+            const avgMB = ((est.perPage.reduce((a,b)=>a+b,0) / est.perPage.length) / 1024 / 1024).toFixed(2);
+            addLog(`  平均每頁: ~${avgMB} MB（估算）`, 'info');
+        }
+        addLog('（注意：此為快速抽樣估算，實際結果可能因內容及容器開銷而有差異）', 'info');
+    } catch (e) {
+        addLog(`預估大小失敗: ${e.message}`, 'error');
+    } finally {
+        estimateBtn.disabled = false;
+    }
+}
 
 async function startProcessing() {
     if (state.files.length === 0) {
@@ -236,6 +282,27 @@ async function startProcessing() {
         // Step 1: 轉換檔案為圖片
         await convertFilesToImages();
         
+        // Step 1.5: 處理前預估輸出大小
+        try {
+            addLog('🔎 正在預估最終輸出大小（快速抽樣）...', 'progress');
+            const preOptions = {
+                numColors: parseInt(numColorsInput.value),
+                valueThreshold: parseFloat(valueThresholdInput.value),
+                satThreshold: parseFloat(satThresholdInput.value),
+                sampleFraction: parseFloat(sampleFractionInput.value) / 100,
+            };
+            const format = outputFormatSelect.value;
+            const est = await estimateOutputSizePreflight(state.inputImages, preOptions, { format, jpgQuality: 0.9 });
+            const totalMB = (est.totalBytes / 1024 / 1024).toFixed(2);
+            addLog(`📐 預估總大小: ~${totalMB} MB`, 'info');
+            if (est.perPage && est.perPage.length > 1) {
+                const avgMB = ((est.perPage.reduce((a,b)=>a+b,0) / est.perPage.length) / 1024 / 1024).toFixed(2);
+                addLog(`  平均每頁: ~${avgMB} MB（估算）`, 'info');
+            }
+        } catch (e) {
+            addLog(`預估大小失敗（將直接進行處理）: ${e.message}`, 'warning');
+        }
+
         // Step 2: 套用 noteshrink 算法
         await processImagesWithNoteshrink();
         
@@ -298,6 +365,35 @@ async function convertFilesToImages() {
         addLog('  顯示第一頁預覽...', 'info');
         // 預覽實現將在後期功能中添加
     }
+}
+
+/**
+ * 用於預估的輕量轉圖（不改動全域 state），盡量降低成本
+ * - 對 PDF：採用低 DPI（例如 72）轉成影像
+ * - 對圖片：直接載入即可（預估流程會再縮圖）
+ */
+async function convertFilesToImagesForPreflight(files) {
+    const results = [];
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        try {
+            if (isPDF(file)) {
+                const lowDpi = 72; // 輕量預估
+                const images = await pdfToImages(file, lowDpi);
+                // 直接加入（不改變 state）
+                results.push(...images);
+            } else if (isImage(file)) {
+                const imageData = await loadImage(file);
+                results.push(imageData);
+            }
+        } catch (err) {
+            addLog(`預估用轉換失敗: ${file.name} - ${err.message}`, 'warning');
+        }
+    }
+    if (results.length === 0) {
+        addLog('找不到可用於預估的頁面/圖片', 'warning');
+    }
+    return results;
 }
 
 /**
