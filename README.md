@@ -1,7 +1,7 @@
 # PDF Noteshrink Web
 
 🚀 **掃描筆記壓縮工具** - 在瀏覽器中本地處理 PDF 和圖片
-
+🔗 線上使用: [https://lokchonmou.github.io/pdf_noteshrink/](https://lokchonmou.github.io/pdf_noteshrink/)
 
 ## 功能特性 ✨
 
